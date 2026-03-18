@@ -12,3 +12,5 @@ import sys
 from pathlib import Path
 
 import requests
+
+Program creating .csv file with the data from deploy horoscope. 
