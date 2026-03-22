@@ -1,110 +1,151 @@
 import argparse
 import csv
 import datetime
-import json
 import sys
 from pathlib import Path
 
 import requests
 
 
-API_URL = "https://deployhoroscope.ru/api/v1/day"
+API_ENDPOINTS = {
+    "day": "https://deployhoroscope.ru/api/v1/day",
+    "month": "https://deployhoroscope.ru/api/v1/month",
+}
 
-#Запрос, возвращающий гороскоп на текущий день
-def fetch_day_horoscope() -> dict:
-    r = requests.get(API_URL, timeout=10)
+
+def fetch_horoscope(endpoint_type: str = "day") -> dict:
+    if endpoint_type not in API_ENDPOINTS:
+        raise ValueError(f"Unknown endpoint: {endpoint_type}")
+    
+    url = API_ENDPOINTS[endpoint_type]
+    r = requests.get(url, timeout=10)
     r.raise_for_status()
     return r.json()
 
-#Собираем дату
+
 def format_date(result: dict) -> str:
     year = result.get("year")
-    month = result.get("month", {}).get("id")
+    month = result.get("month", {})
     day = result.get("day")
-
+    
+    month_id = month.get("id") if isinstance(month, dict) else month
+    
     try:
-        return datetime.date(int(year), int(month), int(day)).isoformat()
-    except Exception:
-        return f"{year}-{month}-{day}"
+        if day:
+            return datetime.date(int(year), int(month_id), int(day)).isoformat()
+        return datetime.date(int(year), int(month_id), 1).isoformat()
+    except (ValueError, TypeError):
+        return f"{year}-{month_id}-{day}" if day else f"{year}-{month_id}"
 
-#Записываем данные в .csv
-def write_csv(path: Path, date: str, signs: list[dict]) -> None:
+
+def write_csv(path: Path, date: str, signs: list[dict], endpoint_type: str = "day") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    with path.open("w", encoding="utf-8", newline="") as f:
+    
+    if endpoint_type == "day":
         fieldnames = ["date", "id", "name_en", "name_ru", "status", "comment"]
+    else:
+        fieldnames = ["date", "id", "name_en", "name_ru"]
+        if signs:
+            fieldnames += [k for k in signs[0].keys() if k not in fieldnames]
+    
+    with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-
+        
         for sign in signs:
-            writer.writerow(
-                {
-                    "date": date,
-                    "id": sign.get("id"),
-                    "name_en": sign.get("name_en"),
-                    "name_ru": sign.get("name_ru"),
-                    "status": sign.get("status"),
-                    "comment": sign.get("comment"),
-                }
-            )
+            row = {
+                "date": date,
+                "id": sign.get("id"),
+                "name_en": sign.get("name_en"),
+                "name_ru": sign.get("name_ru"),
+            }
+            
+            if endpoint_type == "day":
+                row["status"] = sign.get("status")
+                row["comment"] = sign.get("comment")
+            else:
+                for key in sign.keys():
+                    if key not in row:
+                        row[key] = sign.get(key)
+            
+            writer.writerow(row)
 
-#главная функция, получающая аргументы, обрабатывающая их и сохраняющая в .csv
+
+def print_sign(sign: dict) -> None:
+    status = sign.get("status", "")
+    comment = sign.get("comment", "")
+    if status or comment:
+        print(f"- {sign.get('name_ru')} ({sign.get('id')}): {status}")
+        if comment:
+            print(f"  {comment}")
+    else:
+        print(f"- {sign.get('name_ru')} ({sign.get('id')})")
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Получить гороскоп")
+    parser = argparse.ArgumentParser(description="Fetch horoscope from API")
+    parser.add_argument(
+        "--type",
+        choices=["day", "month"],
+        default="day",
+        help="Horoscope type: 'day' or 'month' (default: day)",
+    )
     parser.add_argument(
         "--out",
-        default="horoscopes.csv",
-        help="Путь для сохранения CSV (по умолчанию horoscopes.csv)",
+        help="Output CSV file path (default: day.csv or month.csv)",
     )
     parser.add_argument(
         "--sign",
-        help="Показать гороскоп только для одного знака (id, name_en или name_ru)",
+        help="Filter by zodiac sign (id, name_en, or name_ru)",
     )
     args = parser.parse_args(argv)
-
+    
+    if not args.out:
+        args.out = f"{args.type}.csv"
+    
     try:
-        payload = fetch_day_horoscope()
+        payload = fetch_horoscope(endpoint_type=args.type)
     except Exception as e:
-        print("Не удалось получить данные из API:", e, file=sys.stderr)
+        print(f"Error fetching API: {e}", file=sys.stderr)
         return 1
-
+    
     result = payload.get("result") or {}
     date_str = format_date(result)
     signs = result.get("signs") or []
-
+    
     if not signs:
-        print("В ответе от API нет списка знаков.")
+        print("No horoscope data in response", file=sys.stderr)
         return 1
-
-    print(f"Гороскоп на {date_str}")
-
-    def print_sign(sign: dict) -> None:
-        status = sign.get("status", "")
-        comment = sign.get("comment", "")
-        print(f"- {sign.get('name_ru')} ({sign.get('id')}): {status}\n  {comment}\n")
-
+    
+    print(f"Horoscope for {date_str} ({args.type})")
+    
     if args.sign:
         key = args.sign.strip().lower()
-        found = None
-        for sign in signs:
-            if key in {sign.get("id", ""), sign.get("name_en", "").lower(), sign.get("name_ru", "").lower()}:
-                found = sign
-                break
+        found = next(
+            (s for s in signs if key in {
+                s.get("id", ""),
+                s.get("name_en", "").lower(),
+                s.get("name_ru", "").lower(),
+            }),
+            None,
+        )
         if found:
             print_sign(found)
         else:
-            print(f"Знак '{args.sign}' не найден в ответе API.")
+            print(f"Sign '{args.sign}' not found", file=sys.stderr)
+            return 1
     else:
         for sign in signs:
             print_sign(sign)
-
-    write_csv(Path(args.out), date_str, signs)
-    print(f"Сохранено: {args.out}")
-
+    
+    write_csv(Path(args.out), date_str, signs, endpoint_type=args.type)
+    print(f"Saved to: {args.out}")
+    
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
