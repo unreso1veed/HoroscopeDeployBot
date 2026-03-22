@@ -1,4 +1,4 @@
-Thorough api request for horoscopedeploy.ru which returns deploy horoscope for a current day
+Thorough api request for horoscopedeploy.ru which returns deploy horoscope for a current day and a whole month
 -------------
 Based on https://deployhoroscope.ru
 
